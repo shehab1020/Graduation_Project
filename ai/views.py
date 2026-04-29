@@ -1,5 +1,5 @@
 from django.shortcuts import render
-from .ai_model import select_questions, get_level, get_question_score, grade_answer, get_overall_result
+from .ai_model import select_questions, get_level, get_question_score, grade_answer, get_overall_result, AVAILABLE_TRACKS
 from .model_engine import scaler, xgb, bert_model, df
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -7,8 +7,6 @@ from rest_framework import status
 
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
-
-AVAILABLE_TRACKS = ["Data Analysis", "Front-End"]
 
 
 @api_view(['GET'])
@@ -36,6 +34,8 @@ def get_questions(request):
         return Response({'error': e}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+
+
 def get_question_by_id(q_id):
     row = df[df["question_id"] == q_id]
 
@@ -51,6 +51,44 @@ def get_question_by_id(q_id):
         "topic_area": row["topic_area"],
         "track": row["track"]
     }
+
+
+
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def evaluate(request):
+    data = request.data['answers']
+    total = []
+    for item in data:
+        question_id = item['question_id']
+        row = get_question_by_id(question_id)
+        question = row['question_text']
+        student_answer = item['student_answer']
+        difficulty = row['difficulty_level']
+        topic = row['topic_area']
+        track = row['track']
+        model_answer = row['model_answer']
+        
+        results = grade_answer(question=question, model_answer=model_answer, student_answer=student_answer, difficulty=difficulty,track=track, topic=topic)
+
+        q_score = get_question_score(results['label'])
+        results['q_score'] = q_score
+        total.append(results)
+    for x, y in zip(data, total):
+        x['label'] = y['label']
+        x['q_score'] = y['q_score']
+    print(total)
+    final = get_overall_result(total, track)
+    return Response(final)
+
+
+
+
+
+
+
 
 
 
@@ -79,32 +117,6 @@ def get_question_by_id(q_id):
 
 
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def evaluate(request):
-    data = request.data['answers']
-    total = []
-    for item in data:
-        question_id = item['question_id']
-        row = get_question_by_id(question_id)
-        question = row['question_text']
-        student_answer = item['student_answer']
-        difficulty = row['difficulty_level']
-        topic = row['topic_area']
-        track = row['track']
-        model_answer = row['model_answer']
-        
-        results = grade_answer(question=question, model_answer=model_answer, student_answer=student_answer, difficulty=difficulty,track=track, topic=topic)
-
-        q_score = get_question_score(results['label'])
-        results['q_score'] = q_score
-        total.append(results)
-    for x, y in zip(data, total):
-        x['label'] = y['label']
-        x['q_score'] = y['q_score']
-    print(total)
-    data = get_overall_result(data, 'Front-End')
-    return Response(data)
 
 
 # [
@@ -174,7 +186,7 @@ def evaluate(request):
 #             "score": q_score
 #         })
 
-#     # 🔥 حساب التوبيك
+#     #  حساب التوبيك
 #     topic_scores = {}
 #     difficulty_weights = {"easy": 1, "medium": 2, "hard": 3}
 
@@ -188,13 +200,13 @@ def evaluate(request):
 #         topic_scores[topic]["score"] += r["score"] * weight
 #         topic_scores[topic]["max"] += 10 * weight
 
-#     # 🔥 overall
+#     #  overall
 #     total_score = sum(v["score"] for v in topic_scores.values())
 #     total_max = sum(v["max"] for v in topic_scores.values())
 
 #     overall_pct = (total_score / total_max * 100) if total_max > 0 else 0
 
-#     # 🔥 topics output
+#     #  topics output
 #     topics_out = {}
 
 #     for topic, vals in topic_scores.items():

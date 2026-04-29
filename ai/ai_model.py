@@ -1,22 +1,63 @@
-from .model_engine import diff_enc, topic_enc, track_enc, bert_model, xgb, scaler, df ,MODEL_DIR
+from .model_engine import diff_enc, topic_enc, track_enc, bert_model, xgb, scaler, df
+
 import numpy as np
 import re
 import random
 import torch
-import os
-
+import warnings
+warnings.filterwarnings('ignore')
 
 from transformers import (
     AutoTokenizer,
 )
 
+
+
+
+
+
+AVAILABLE_TRACKS = ["Data Analysis", "Front-End"]
+
+STOP_WORDS = {
+    "the","a","an","is","are","was","were","be","been","have","has","had",
+    "do","does","did","will","would","can","could","should","may","might",
+    "of","in","on","at","to","for","with","by","from","up","about","into",
+    "it","its","this","that","and","or","not","but","so","if","as","we","you","i"
+}
+
+
+# 2. BERT CROSS-ENCODER
+
 MODEL_NAME = "distilbert-base-uncased"
 MAX_LEN    = 256
+BATCH_SIZE = 16
+EPOCHS     = 2
+LR         = 2e-5
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+def build_input(row):
+    return (
+        str(row["question_text"]) + " [SEP] " +
+        str(row["model_answer"])  + " [SEP] " +
+        str(row["student_answer"])
+    )
+
+def tokenize_fn(examples):
+    return tokenizer(
+        examples["text"],
+        truncation=True,
+        padding="max_length",
+        max_length=MAX_LEN
+    )
 
 
-tokenizer = AutoTokenizer.from_pretrained(
-    os.path.join(MODEL_DIR, "bert_grading_model")
-)
+
+bert_model.eval()
+
+# 5. HAND-CRAFTED FEATURES
+# ============================================================
+
 def extract_keywords(text):
     text = str(text).lower()
     text = re.sub(r"[^\w\s]", "", text)
@@ -27,6 +68,8 @@ def extract_keywords(text):
         "it","its","this","that","and","or","not","but","so","if","as","we","you","i"
     }
     return set(text.split()) - stop
+
+
 
 
 def hand_features(row):
@@ -40,8 +83,9 @@ def hand_features(row):
     kw_recall    = len(s_kw & m_kw) / max(len(m_kw), 1)
     kw_precision = len(s_kw & m_kw) / max(len(s_kw), 1)
     q_relevance  = len(s_kw & q_kw) / max(len(q_kw), 1)
-    len_ratio    = min(len(s_words) / max(len(m_words), 1), 2.0)
-    abs_len      = min(len(s_words) / 50.0, 1.0)
+
+    len_ratio    = min(len(s_words) / max(len(m_words), 1), 1.0)
+    abs_len      = min(len(s_words) / 100.0, 1.0)
 
     bigram_s = set(zip(s_words, s_words[1:])) if len(s_words) > 1 else set()
     bigram_m = set(zip(m_words, m_words[1:])) if len(m_words) > 1 else set()
@@ -58,14 +102,46 @@ def hand_features(row):
         difficulty, topic, track
     ]
 
-def build_hand_matrix(subset_df):
-    return np.array([hand_features(r) for _, r in subset_df.iterrows()])
+
+
+
+
+
+
+def is_meaningful_answer(student_answer, min_meaningful_words=3):
+
+    if not student_answer or not isinstance(student_answer, str):
+        return False
+    text = student_answer.strip().lower()
+    if not text:
+        return False
+    words = re.findall(r"[a-zA-Z]{2,}", text)
+    meaningful = [w for w in words if w not in STOP_WORDS]
+    return len(meaningful) >= min_meaningful_words
+
+
+def is_relevant_answer(question, model_answer, student_answer, threshold=0.5):
+
+    ref_text = f"{question} [SEP] {model_answer}"
+
+    ref_enc = tokenizer(ref_text, truncation=True, padding=True,
+                        max_length=MAX_LEN, return_tensors="pt")
+    stu_enc = tokenizer(student_answer, truncation=True, padding=True,
+                        max_length=MAX_LEN, return_tensors="pt")
+
+    bert_model.eval()
+    with torch.no_grad():
+
+        ref_emb = bert_model.distilbert(**ref_enc).last_hidden_state[:, 0, :]
+        stu_emb = bert_model.distilbert(**stu_enc).last_hidden_state[:, 0, :]
+
+    cos_sim = torch.nn.functional.cosine_similarity(ref_emb, stu_emb).item()
+    return cos_sim >= threshold
+
+
 
 def select_questions(track, n_per_topic=2):
-    """
-    يختار n_per_topic أسئلة randomly من كل topic
-    من الـ track المحدد فقط — max 10
-    """
+
     questions_bank = (
         df[["question_id", "question_text", "model_answer",
             "difficulty_level", "topic_area", "track"]]
@@ -91,8 +167,32 @@ def select_questions(track, n_per_topic=2):
     return selected[:10]
 
 
-def grade_answer(question, model_answer, student_answer, difficulty="medium", topic="General", track="Front-End"):
-    """يقيّم إجابة واحدة"""
+
+
+
+
+
+
+def grade_answer(question, model_answer, student_answer,
+                difficulty="medium", topic="General", track="Front-End"):
+
+    if not is_meaningful_answer(student_answer):
+        return {
+            "prediction": 0,
+            "label":      "Wrong",
+            "confidence": {"wrong": 1.0, "partial": 0.0, "correct": 0.0},
+            "note": "Answer rejected: no meaningful content."
+        }
+
+
+    if not is_relevant_answer(question, model_answer, student_answer, threshold=0.5):
+        return {
+            "prediction": 0,
+            "label":      "Wrong",
+            "confidence": {"wrong": 1.0, "partial": 0.0, "correct": 0.0},
+            "note": "Answer rejected: not relevant to the question."
+        }
+
     text = f"{question} [SEP] {model_answer} [SEP] {student_answer}"
     enc  = tokenizer(text, truncation=True, padding=True,
                     max_length=MAX_LEN, return_tensors="pt")
@@ -128,49 +228,41 @@ def grade_answer(question, model_answer, student_answer, difficulty="medium", to
 
 
 def get_question_score(label):
-    """
-    يحوّل الـ label لـ score من 10 بناءً على الفهم:
-    Correct  → random من 9  لـ 10   (فهم كامل)
-    Partial  → random من 6  لـ 8    (فهم جزئي)
-    Wrong    → random من 0  لـ 3    (مفيش فهم)
-    """
+
     if label == "Correct":
         return round(random.uniform(9, 10), 1)
     elif label == "Partial":
         return round(random.uniform(6, 8), 1)
-    else:  # Wrong
+    else:
         return round(random.uniform(0, 3), 1)
 
 
 def get_level(percentage):
-    """
-    percentage هنا من 0 لـ 100 بناءً على الـ weighted score
-    """
+    """percentage من 0 لـ 100"""
     if percentage < 40:
         return "Beginner"
     elif percentage < 70:
         return "Intermediate"
     else:
         return "Advanced"
-    
+
+
 
 
 def get_topic_results(results: list) -> dict:
+
     difficulty_weights = {"easy": 1, "medium": 2, "hard": 3}
     topic_scores = {}
 
     for r in results:
-        topic = r["topic_area"]
+        topic  = r["topic_area"]
         weight = difficulty_weights.get(r["difficulty_level"], 2)
-
         if topic not in topic_scores:
             topic_scores[topic] = {"score": 0, "max": 0}
-
         topic_scores[topic]["score"] += r["q_score"] * weight
-        topic_scores[topic]["max"] += 10 * weight
+        topic_scores[topic]["max"]   += 10 * weight
 
     topic_results = {}
-
     for topic, vals in topic_scores.items():
         pct = (vals["score"] / vals["max"] * 100) if vals["max"] > 0 else 0
         topic_results[topic] = {
@@ -182,29 +274,31 @@ def get_topic_results(results: list) -> dict:
 
 
 
+# النتيجة النهائية الكلية
+
 
 def get_overall_result(results: list, track: str) -> dict:
+
     difficulty_weights = {"easy": 1, "medium": 2, "hard": 3}
     total_score = 0
-    total_max = 0
+    total_max   = 0
 
     for r in results:
-        weight = difficulty_weights.get(r["difficulty_level"], 2)
+        weight       = difficulty_weights.get(r["difficulty_level"], 2)
         total_score += r["q_score"] * weight
-        total_max += 10 * weight
+        total_max   += 10 * weight
 
     overall_pct = (total_score / total_max * 100) if total_max > 0 else 0
 
     question_breakdown = []
-
     for i, r in enumerate(results, 1):
         question_breakdown.append({
             "question_number": i,
-            "topic": r["topic_area"],
-            "difficulty": r["difficulty_level"],
-            "label": r["label"],
-            "score": round(r["q_score"], 1),
-            "confidence": r.get("confidence", {})
+            "topic":           r["topic_area"],
+            "difficulty":      r["difficulty_level"],
+            "label":           r["label"],
+            "score":           round(r["q_score"], 1),
+            "confidence":      r.get("confidence", {})
         })
 
     return {

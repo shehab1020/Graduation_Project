@@ -9,6 +9,13 @@ BERT_DIR = os.path.join(MODEL_DIR, 'bert_grading_model')
 
 
 
+MODEL_NAME = "distilbert-base-uncased"
+MAX_LEN    = 256
+BATCH_SIZE = 16
+EPOCHS     = 2
+LR         = 2e-5
+
+
 xgb = joblib.load(os.path.join(MODEL_DIR, 'xgb_hybrid.pkl'))
 bert_model = AutoModelForSequenceClassification.from_pretrained(BERT_DIR)
 scaler = joblib.load(os.path.join(MODEL_DIR, 'scaler.pkl'))
@@ -21,7 +28,4 @@ df = pd.read_csv(DATA_PATH, encoding="latin-1")
 
 
 print("✅ All models loaded successfully")
-
-print(BASE_DIR)
-
 
