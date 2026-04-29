@@ -53,6 +53,45 @@ def get_question_by_id(q_id):
     }
 
 
+# @api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+# def evaluate(request):
+#     data = request.data.get('answers')
+#     if not data:
+#         return Response({"error": "answers required"}, status=400)
+
+#     total = []
+
+#     for item in data:
+#         question_id = item['question_id']
+#         row = get_question_by_id(question_id)
+
+#         if not row:
+#             return Response({"error": f"Invalid question_id: {question_id}"}, status=400)
+
+#         results = grade_answer(
+#             question=row['question_text'],
+#             model_answer=row['model_answer'],
+#             student_answer=item['student_answer'],
+#             difficulty=row['difficulty_level'],
+#             topic=row['topic_area'],
+#             track=row['track']
+#         )
+
+#         results['q_score'] = get_question_score(results['label'])
+#         results['difficulty_level'] = row['difficulty_level']
+#         results['topic_area'] = row['topic_area']
+#         results['track'] = row['track']
+
+#         total.append(results)
+
+#     track = total[0]['track'] if total else 'Unknown'
+
+#     final = get_overall_result(total, track)
+
+#     return Response(final)
+
+
 
 
 
@@ -80,6 +119,13 @@ def evaluate(request):
         x['label'] = y['label']
         x['q_score'] = y['q_score']
     print(total)
+
+    def get_track():
+        for i in data:
+            print(i['track'])
+    get_track()
+    print(f"================================= {track}==================================")
+    print(data)
     final = get_overall_result(total, track)
     return Response(final)
 
