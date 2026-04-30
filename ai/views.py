@@ -98,35 +98,35 @@ def get_question_by_id(q_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def evaluate(request):
-    data = request.data['answers']
-    total = []
-    for item in data:
-        question_id = item['question_id']
-        row = get_question_by_id(question_id)
-        question = row['question_text']
-        student_answer = item['student_answer']
-        difficulty = row['difficulty_level']
-        topic = row['topic_area']
-        track = row['track']
-        model_answer = row['model_answer']
-        
-        results = grade_answer(question=question, model_answer=model_answer, student_answer=student_answer, difficulty=difficulty,track=track, topic=topic)
+    data = request.data.get('answers', None)
+    if not data:
+        return Response({'Error': 'answers are required.'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        total = []
+        track_for_overall_fuc = ''
+        for item in data:
+            question_id = item['question_id']
+            row = get_question_by_id(question_id)
+            question = row['question_text']
+            student_answer = item['student_answer']
+            difficulty = row['difficulty_level']
+            topic = row['topic_area']
+            track = row['track']
+            model_answer = row['model_answer']
+            
+            results = grade_answer(question=question, model_answer=model_answer, student_answer=student_answer, difficulty=difficulty,track=track, topic=topic)
 
-        q_score = get_question_score(results['label'])
-        results['q_score'] = q_score
-        total.append(results)
-    for x, y in zip(data, total):
-        x['label'] = y['label']
-        x['q_score'] = y['q_score']
-    print(total)
+            q_score = get_question_score(results['label'])
+            results['q_score'] = q_score
+            results["difficulty_level"] = difficulty
+            results["topic_area"] = topic
+            results["track"] = track
+            track_for_overall_fuc = track
+            total.append(results)
+        final = get_overall_result(total, track_for_overall_fuc)
+    except:
+        raise Exception('Evaluation Failed')
 
-    def get_track():
-        for i in data:
-            print(i['track'])
-    get_track()
-    print(f"================================= {track}==================================")
-    print(data)
-    final = get_overall_result(total, track)
     return Response(final)
 
 
