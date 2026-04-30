@@ -6,10 +6,12 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from rest_framework.permissions import IsAuthenticated, AllowAny
-
+from django.http import JsonResponse
+from .roadmap_model import RoadmapModel
+import os
 
 AVAILABLE_TRACKS = ["Data Analysis", "Front-End"]
-
+AVAILABLE_LEVELS = ["beginner", "intermediate", "advanced"]
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -54,29 +56,6 @@ def get_question_by_id(q_id):
 
 
 
-# @api_view(['POST'])
-# @permission_classes([IsAuthenticated])
-# def evaluate(reqeust):
-#     data = reqeust.data
-#     required = [ 'question_id' ,'question_text', 'student_answer', 'difficulty_level', 'topic_area', 'track']
-#     for r in required:
-#         if r not in data:
-#             return Response({'error': 'invalid inputs'}, status=status.HTTP_400_BAD_REQUEST)
-#     question_id = data['question_id']
-#     question = data['question_text']
-#     student_answer = data['student_answer']
-#     difficulty = data['difficulty_level']
-#     topic = data['topic_area']
-#     track = data['track']
-#     model_answer = get_question_by_id(question_id)
-#     model_answer = model_answer['model_answer']
-
-#     results = grade_answer(question=question, model_answer=model_answer, student_answer=student_answer, difficulty=difficulty,track=track, topic=topic)
-
-#     q_score = get_question_score(results['label'])
-#     results['q_score'] = q_score
-#     return Response(results)
-
 
 
 @api_view(['POST'])
@@ -102,9 +81,90 @@ def evaluate(request):
     for x, y in zip(data, total):
         x['label'] = y['label']
         x['q_score'] = y['q_score']
-    print(total)
     data = get_overall_result(data, 'Front-End')
     return Response(data)
+
+
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+dataset_dir = os.path.join(BASE_DIR, 'ml_model', 'roadmap_dataset.csv')
+
+def get_model():
+    return RoadmapModel(csv_path=dataset_dir)
+
+
+@api_view(['GET'])
+def generate_roadmap(request):
+    model = get_model()
+    track = request.query_params.get("track", None)
+    level = request.query_params.get("level", None)
+    if not track or not level:
+        return Response({'Error':'track and level are required'}, status=status.HTTP_400_BAD_REQUEST)
+    if track not in AVAILABLE_TRACKS:
+        return Response({'Error':f'invalid track!! avaliable tracks: {AVAILABLE_TRACKS}'}, status=status.HTTP_400_BAD_REQUEST)
+    if level not in AVAILABLE_LEVELS:
+        return Response({'Error':f'invalid level!! avaliable tracks: {AVAILABLE_LEVELS}'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    
+    try:
+        roadmap = model.generate(track=track, level=level)
+        return Response({"data": roadmap})
+    except ValueError as e:
+        return Response({"Error": str(e)}, status=400)
+
+
+
+@api_view(['GET'])
+def get_options(request):
+    model = get_model()
+    return Response(model.get_options())
+
+
+
+
+
+
+
+
+
+
+
+
+
+# @api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+# def evaluate(reqeust):
+#     data = reqeust.data
+#     required = [ 'question_id' ,'question_text', 'student_answer', 'difficulty_level', 'topic_area', 'track']
+#     for r in required:
+#         if r not in data:
+#             return Response({'error': 'invalid inputs'}, status=status.HTTP_400_BAD_REQUEST)
+#     question_id = data['question_id']
+#     question = data['question_text']
+#     student_answer = data['student_answer']
+#     difficulty = data['difficulty_level']
+#     topic = data['topic_area']
+#     track = data['track']
+#     model_answer = get_question_by_id(question_id)
+#     model_answer = model_answer['model_answer']
+
+#     results = grade_answer(question=question, model_answer=model_answer, student_answer=student_answer, difficulty=difficulty,track=track, topic=topic)
+
+#     q_score = get_question_score(results['label'])
+#     results['q_score'] = q_score
+#     return Response(results)
+
+
+
+
+
+
+
+
+
+
 
 
 # [
