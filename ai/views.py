@@ -1,40 +1,43 @@
+import os
+import random
 from django.shortcuts import render
-from .ai_model import select_questions, get_level, get_question_score, grade_answer, get_overall_result, AVAILABLE_TRACKS
-from .model_engine import scaler, xgb, bert_model, df
+from .ai_model import evaluate_answer, calculate_level, calculate_score
+from .model_engine import df
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
 
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.http import JsonResponse
 from .roadmap_model import RoadmapModel
-import os
+
+AVAILABLE_TRACKS = ["data_analysis", "frontend"]
 AVAILABLE_LEVELS = ["beginner", "intermediate", "advanced"]
 
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def get_questions(request):
-    track = request.query_params.get('track', None)
 
-    if not track or (track not in AVAILABLE_TRACKS):
-        return Response({'error':f'invalid track!! avaliable tracks: {AVAILABLE_TRACKS}'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    questions = select_questions(track=track)
-    try:
-        out = [
-        {
-            "question_id": q['question_id'],
-            "question_text":q['question_text'],
-            "difficulty_level":q['difficulty_level'],
-            "topic_area":q['topic_area'],
-            "track":q['track'],
-        }
-        for q in questions
-        ]
-        return Response({'track':track, 'questions': out}, status=status.HTTP_200_OK)
-    except Exception as e:
-        return Response({'error': e}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+def select_questions(track, n_per_topic=2):
+    questions_bank = (
+        df[["question_id", "question",
+            "difficulty", "topic", "track"]]
+        .drop_duplicates(subset="question_id")
+        .reset_index(drop=True)
+    )
 
+    track_qs = questions_bank[questions_bank["track"] == track]
+
+    if len(track_qs) == 0:
+        raise ValueError(f"No questions found for track: {track}")
+
+    topics   = track_qs["topic"].unique().tolist()
+    selected = []
+
+    for topic in topics:
+        topic_qs = track_qs[track_qs["topic"] == topic]
+        sampled  = topic_qs.sample(min(n_per_topic, len(topic_qs)), random_state=None)
+        for _, row in sampled.iterrows():
+            selected.append(row.to_dict())
+
+    random.shuffle(selected)
+    return selected[:10]
 
 
 
@@ -47,47 +50,59 @@ def get_question_by_id(q_id):
     row = row.iloc[0]
 
     return {
-        "question_text": row["question_text"],
-        "model_answer": row["model_answer"],
-        "difficulty_level": row["difficulty_level"],
-        "topic_area": row["topic_area"],
+        "question": row["question"],
+        "correct_answer": row["correct_answer"],
+        "difficulty": row["difficulty"],
+        "topic": row["topic"],
         "track": row["track"]
     }
 
 
-@api_view(['POST'])
+
+
+
+@api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def evaluate(request):
-    data = request.data.get('answers', None)
-    if not data:
-        return Response({'Error': 'answers are required.'}, status=status.HTTP_400_BAD_REQUEST)
+def get_questions(request):
+    track = request.query_params.get('track', None)
+
+    if not track or (track not in AVAILABLE_TRACKS):
+        return Response({'error':f'invalid track!! avaliable tracks: {AVAILABLE_TRACKS}'}, status=status.HTTP_400_BAD_REQUEST)
     try:
-        total = []
-        track_for_overall_fuc = ''
-        for item in data:
-            question_id = item['question_id']
-            row = get_question_by_id(question_id)
-            question = row['question_text']
-            student_answer = item['student_answer']
-            difficulty = row['difficulty_level']
-            topic = row['topic_area']
-            track = row['track']
-            model_answer = row['model_answer']
-            
-            results = grade_answer(question=question, model_answer=model_answer, student_answer=student_answer, difficulty=difficulty,track=track, topic=topic)
+        questions = select_questions(track=track)
+        out = [
+        {
+            "question_id": q['question_id'],
+            "question":q['question'],
+            "difficulty":q['difficulty'],
+            "topic":q['topic'],
+            "track":q['track'],
+        }
+        for q in questions
+        ]
+        return Response({'track':track, 'questions': out}, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': e}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            q_score = get_question_score(results['label'])
-            results['q_score'] = q_score
-            results["difficulty_level"] = difficulty
-            results["topic_area"] = topic
-            results["track"] = track
-            track_for_overall_fuc = track
-            total.append(results)
-        final = get_overall_result(total, track_for_overall_fuc)
-    except:
-        raise Exception('Evaluation Failed')
 
-    return Response(final)
+
+@api_view(['POST'])
+def evaluate(request):
+    if request.method == 'POST':
+        answers = request.data.get('answers')
+        if not answers:
+            return Response({'error': 'answers are required!!'}, status=status.HTTP_400_BAD_REQUEST)
+        result = []
+        for answer in answers:
+            q_id = answer['question_id']
+            student_answer = answer['student_answer']
+
+            out = get_question_by_id(q_id)
+            correct_answer = out['correct_answer']
+            result.append(evaluate_answer(correct_answer=correct_answer, student_answer=student_answer))
+        score = calculate_score(result)
+        level = calculate_level(score)
+        return Response({'score':score, 'level':level, 'result':result}, status=status.HTTP_200_OK)
 
 
 
@@ -125,6 +140,93 @@ def generate_roadmap(request):
 def get_options(request):
     model = get_model()
     return Response(model.get_options())
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# @api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+# def evaluate(request):
+#     data = request.data.get('answers', None)
+#     if not data:
+#         return Response({'Error': 'answers are required.'}, status=status.HTTP_400_BAD_REQUEST)
+#     try:
+#         total = []
+#         track_for_overall_fuc = ''
+#         for item in data:
+#             question_id = item['question_id']
+#             row = get_question_by_id(question_id)
+#             question = row['question_text']
+#             student_answer = item['student_answer']
+#             difficulty = row['difficulty_level']
+#             topic = row['topic_area']
+#             track = row['track']
+#             model_answer = row['model_answer']
+            
+#             results = grade_answer(question=question, model_answer=model_answer, student_answer=student_answer, difficulty=difficulty,track=track, topic=topic)
+
+#             q_score = get_question_score(results['label'])
+#             results['q_score'] = q_score
+#             results["difficulty_level"] = difficulty
+#             results["topic_area"] = topic
+#             results["track"] = track
+#             track_for_overall_fuc = track
+#             total.append(results)
+#         final = get_overall_result(total, track_for_overall_fuc)
+#     except:
+#         raise Exception('Evaluation Failed')
+
+#     return Response(final)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
