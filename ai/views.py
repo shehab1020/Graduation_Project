@@ -109,7 +109,7 @@ def evaluate(request):
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-dataset_dir = os.path.join(BASE_DIR, 'ml_model', 'roadmap_master_dataset_updated.csv')
+dataset_dir = os.path.join(BASE_DIR, 'ml_model', 'roadmap_master_dataset_links.csv')
 
 def get_model():
     return RoadmapModel(csv_path=dataset_dir)
